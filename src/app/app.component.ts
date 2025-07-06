@@ -8,6 +8,7 @@ import autoTable from 'jspdf-autotable';
 import { ExcelPreviewComponent } from './excel-preview';
 import * as XLSX from 'xlsx';
 import { ImageEditorComponent } from './image-editor/image-editor.component';
+import { StorageService } from './storage.service';
 
 // Declaración de tipos para que TypeScript reconozca las propiedades del plugin
 declare module 'jspdf' {
@@ -55,17 +56,36 @@ export class AppComponent implements OnInit {
   public imageEditorEscenarioIndex: number | null = null;
   public imageEditorEvidenciaIndex: number | null = null;
 
+  constructor(private storageService: StorageService) {} // Inyecta el servicio aquí
+
   ngOnInit(): void {
-    // Datos de ejemplo para la demostración
-    this.escenarios = [{
-      'ID Caso': 'CP1',
-      'Escenario de Prueba': 'Crear tabla con nombre válido.',
-      'Precondiciones': 'El sistema de base de datos está accesible.',
-      'Paso a Paso': 'Ejecutar la sentencia SQL para crear la tabla de saldos.',
-      'Resultado Esperado': 'La tabla se crea exitosamente.',
-      evidencias: []
-    }];
+    const escenariosGuardados = this.storageService.cargarEscenarios();
+    if (escenariosGuardados && escenariosGuardados.length > 0) {
+      this.escenarios = escenariosGuardados;
+    } else {
+      // Si no hay nada guardado, usa los datos de ejemplo
+      this.escenarios = [{
+        'ID Caso': 'CP1',
+        'Escenario de Prueba': 'Crear tabla con nombre válido.',
+        'Precondiciones': 'El sistema de base de datos está accesible.',
+        'Paso a Paso': 'Ejecutar la sentencia SQL para crear la tabla de saldos.',
+        'Resultado Esperado': 'La tabla se crea exitosamente.',
+        evidencias: []
+      }];
+    }
     this.escenarioActivo = 0;
+  }
+
+  public guardarEstado(): void {
+    this.storageService.guardarEscenarios(this.escenarios);
+    console.log('Estado guardado automáticamente.');
+  }
+
+  limpiarProyecto(): void {
+    if (confirm('¿Estás seguro de que quieres borrar todo el proyecto? Esta acción no se puede deshacer.')) {
+      this.storageService.limpiarEstado();
+      window.location.reload(); // Recarga la página para empezar de cero
+    }
   }
 
   // --- Métodos de manejo de la UI (sin cambios) ---
@@ -74,12 +94,14 @@ export class AppComponent implements OnInit {
     const nuevoEscenario: Escenario = { 'ID Caso': `CP${this.escenarios.length + 1}`, 'Escenario de Prueba': '', 'Precondiciones': '', 'Paso a Paso': '', 'Resultado Esperado': '', evidencias: [] };
     this.escenarios.push(nuevoEscenario);
     this.escenarioActivo = this.escenarios.length - 1;
+    this.guardarEstado();
   }
   eliminarEscenario(index: number): void {
     if (confirm('¿Estás seguro?')) {
       this.escenarios.splice(index, 1);
       if (this.escenarioActivo >= index && this.escenarioActivo > 0) this.escenarioActivo--;
       else if (this.escenarios.length === 0) this.escenarioActivo = 0;
+      this.guardarEstado();
     }
   }
   subirEvidencias(event: Event, escenarioIndex: number): void {
@@ -88,7 +110,10 @@ export class AppComponent implements OnInit {
     for (let i = 0; i < input.files.length; i++) {
       const file = input.files[i];
       const reader = new FileReader();
-      reader.onload = (e: any) => this.escenarios[escenarioIndex].evidencias.push({ tipo: 'img', nombre: file.name, data: e.target.result });
+      reader.onload = (e: any) => {
+        this.escenarios[escenarioIndex].evidencias.push({ tipo: 'img', nombre: file.name, data: e.target.result });
+        this.guardarEstado(); // Guardar aquí
+      };
       reader.readAsDataURL(file);
     }
     input.value = '';
@@ -111,6 +136,7 @@ export class AppComponent implements OnInit {
               nombre: `Evidencia pegada - ${new Date().toLocaleString('es-CO')}.png`,
               data: e.target.result
             });
+            this.guardarEstado(); // Guardar aquí
           };
           reader.readAsDataURL(blob);
         }
@@ -120,8 +146,16 @@ export class AppComponent implements OnInit {
       alert(`No se pudo pegar la imagen. Es posible que necesites conceder permisos para acceder al portapapeles. Error: ${err.message}`);
     }
   }
-  eliminarEvidencia(escenarioIndex: number, evidenciaIndex: number): void { this.escenarios[escenarioIndex].evidencias.splice(evidenciaIndex, 1); }
-  limpiarEvidencias(escenarioIndex: number): void { if (confirm('¿Limpiar evidencias?')) this.escenarios[escenarioIndex].evidencias = []; }
+  eliminarEvidencia(escenarioIndex: number, evidenciaIndex: number): void {
+    this.escenarios[escenarioIndex].evidencias.splice(evidenciaIndex, 1);
+    this.guardarEstado();
+  }
+  limpiarEvidencias(escenarioIndex: number): void {
+    if (confirm('¿Limpiar evidencias?')) {
+      this.escenarios[escenarioIndex].evidencias = [];
+      this.guardarEstado();
+    }
+  }
   cargarCSV(event: Event): void { /* ... sin cambios ... */ }
 
 
@@ -347,6 +381,7 @@ export class AppComponent implements OnInit {
     this.escenarios[escenarioIndex].evidencias.push({ tipo: 'img', nombre: 'Excel convertido', data: imageUrl });
     this.showExcelPreviewPorEscenario[escenarioIndex] = false;
     this.excelPreviewEscenarioActivo = null;
+    this.guardarEstado();
   }
 
   openImageEditor(escenarioIndex: number, evidenciaIndex: number) {
@@ -366,6 +401,7 @@ export class AppComponent implements OnInit {
   saveImageEditor(editedData: string) {
     if (this.imageEditorEscenarioIndex !== null && this.imageEditorEvidenciaIndex !== null) {
       this.escenarios[this.imageEditorEscenarioIndex].evidencias[this.imageEditorEvidenciaIndex].data = editedData;
+      this.guardarEstado();
     }
     this.closeImageEditor();
   }

@@ -10,6 +10,9 @@
     </label>
     <button class="btn" (click)="agregarEscenario()">Agregar Escenario en Blanco</button>
     <button class="btn" (click)="generarReportePDF()">Descargar PDF</button>
+    <button (click)="limpiarProyecto()" class="btn btn-danger">
+      Limpiar Todo y Empezar de Nuevo
+    </button>
   </div>
 
   <div id="escenarios-container" *ngIf="escenarios.length > 0">
@@ -37,11 +40,11 @@
           </thead>
           <tbody>
             <tr>
-              <td class="editable-cell"><input type="text" [(ngModel)]="esc['ID Caso']" class="editable-input"></td>
-              <td class="editable-cell"><textarea [(ngModel)]="esc['Escenario de Prueba']" class="editable-textarea" rows="4"></textarea></td>
-              <td class="editable-cell"><textarea [(ngModel)]="esc['Precondiciones']" class="editable-textarea" rows="4"></textarea></td>
-              <td class="editable-cell"><textarea [(ngModel)]="esc['Paso a Paso']" class="editable-textarea" rows="4"></textarea></td>
-              <td class="editable-cell"><textarea [(ngModel)]="esc['Resultado Esperado']" class="editable-textarea" rows="4"></textarea></td>
+              <td class="editable-cell"><input type="text" [(ngModel)]="esc['ID Caso']" (ngModelChange)="guardarEstado()" class="editable-input"></td>
+              <td class="editable-cell"><textarea [(ngModel)]="esc['Escenario de Prueba']" (ngModelChange)="guardarEstado()" class="editable-textarea" rows="4"></textarea></td>
+              <td class="editable-cell"><textarea [(ngModel)]="esc['Precondiciones']" (ngModelChange)="guardarEstado()" class="editable-textarea" rows="4"></textarea></td>
+              <td class="editable-cell"><textarea [(ngModel)]="esc['Paso a Paso']" (ngModelChange)="guardarEstado()" class="editable-textarea" rows="4"></textarea></td>
+              <td class="editable-cell"><textarea [(ngModel)]="esc['Resultado Esperado']" (ngModelChange)="guardarEstado()" class="editable-textarea" rows="4"></textarea></td>
               <td><button class="btn btn-danger" (click)="eliminarEscenario(i)">Eliminar</button></td>
             </tr>
           </tbody>
@@ -52,7 +55,7 @@
           <div class="evidencias-grid" id="evid-grid-{{i}}">
             <div class="evidencia-block" *ngFor="let ev of esc.evidencias; let j = index">
               <div class="evidencia-label">
-                <input type='text' [(ngModel)]="ev.nombre" class="evidencia-nombre" title='Nombre archivo' />
+                <input type='text' [(ngModel)]="ev.nombre" (ngModelChange)="guardarEstado()" class="evidencia-nombre" title='Nombre archivo' />
                 <button class='btn-evidencia-eliminar' (click)="eliminarEvidencia(i, j)" title='Eliminar'>&times;</button>
               </div>
               <img [src]="ev.data" alt="Evidencia" (click)="openImageEditor(i, j)" style="cursor:pointer;" />
