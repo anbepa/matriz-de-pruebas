@@ -5,6 +5,9 @@ import { FormsModule } from '@angular/forms';
 import * as Papa from 'papaparse';
 import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { ExcelPreviewComponent } from './excel-preview';
+import * as XLSX from 'xlsx';
+import { ImageEditorComponent } from './image-editor/image-editor.component';
 
 // Declaración de tipos para que TypeScript reconozca las propiedades del plugin
 declare module 'jspdf' {
@@ -33,7 +36,7 @@ export interface Evidencia {
 @Component({
   selector: 'app-root',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, ExcelPreviewComponent, ImageEditorComponent],
   templateUrl: './app.component.html',
   styleUrls: ['./app.component.css']
 })
@@ -41,6 +44,16 @@ export class AppComponent implements OnInit {
   title = 'Matriz de Casos de Prueba';
   public escenarios: Escenario[] = [];
   public escenarioActivo: number = 0;
+  public excelTableData: string[][] = [];
+  public showExcelPreview = false;
+  public excelImageUrl: string | null = null;
+  public excelTableDataPorEscenario: { [key: number]: string[][] } = {};
+  public showExcelPreviewPorEscenario: { [key: number]: boolean } = {};
+  public excelPreviewEscenarioActivo: number | null = null;
+  public imageEditorVisible = false;
+  public imageEditorData: string | null = null;
+  public imageEditorEscenarioIndex: number | null = null;
+  public imageEditorEvidenciaIndex: number | null = null;
 
   ngOnInit(): void {
     // Datos de ejemplo para la demostración
@@ -80,7 +93,33 @@ export class AppComponent implements OnInit {
     }
     input.value = '';
   }
-  async pegarEvidencia(escenarioIndex: number): Promise<void> { /* ... sin cambios ... */ }
+  async pegarEvidencia(escenarioIndex: number): Promise<void> {
+    if (!navigator.clipboard || !navigator.clipboard.read) {
+      alert('La API del portapapeles no es compatible con este navegador.');
+      return;
+    }
+    try {
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const imageType = item.types.find(type => type.startsWith('image/'));
+        if (imageType) {
+          const blob = await item.getType(imageType);
+          const reader = new FileReader();
+          reader.onload = (e: any) => {
+            this.escenarios[escenarioIndex].evidencias.push({
+              tipo: 'img',
+              nombre: `Evidencia pegada - ${new Date().toLocaleString('es-CO')}.png`,
+              data: e.target.result
+            });
+          };
+          reader.readAsDataURL(blob);
+        }
+      }
+    } catch (err: any) {
+      console.error('Error al pegar desde el portapapeles:', err);
+      alert(`No se pudo pegar la imagen. Es posible que necesites conceder permisos para acceder al portapapeles. Error: ${err.message}`);
+    }
+  }
   eliminarEvidencia(escenarioIndex: number, evidenciaIndex: number): void { this.escenarios[escenarioIndex].evidencias.splice(evidenciaIndex, 1); }
   limpiarEvidencias(escenarioIndex: number): void { if (confirm('¿Limpiar evidencias?')) this.escenarios[escenarioIndex].evidencias = []; }
   cargarCSV(event: Event): void { /* ... sin cambios ... */ }
@@ -105,7 +144,6 @@ export class AppComponent implements OnInit {
     doc.text('Área: QA / Testing', pageWidth / 2, pageHeight / 2, { align: 'center' });
     doc.text('Versión: 1.0', pageWidth / 2, pageHeight / 2 + 20, { align: 'center' });
 
-
     // ======================================================
     // 2. Página de Índice (se llenará al final)
     // ======================================================
@@ -113,7 +151,6 @@ export class AppComponent implements OnInit {
     const pageIndex = doc.getNumberOfPages();
     doc.setFontSize(20);
     doc.text('Índice', margin, margin + 20);
-
 
     // ======================================================
     // 3. Páginas de Contenido (Loop por cada escenario)
@@ -134,23 +171,14 @@ export class AppComponent implements OnInit {
         ]],
         startY: margin,
         theme: 'grid',
-        headStyles: {
-          fillColor: '#e3eafc',
-          textColor: '#1e293b',
-          fontStyle: 'bold'
-        },
-        styles: {
-          cellPadding: 8,
-          fontSize: 10
-        }
+        headStyles: { fillColor: '#e3eafc', textColor: '#1e293b', fontStyle: 'bold' },
+        styles: { cellPadding: 8, fontSize: 10 }
       });
 
-      // Sección de Evidencias (si existen)
       if (esc.evidencias && esc.evidencias.length > 0) {
         let yPos = (doc as any).lastAutoTable.finalY + 30;
 
-        // Título de la sección de evidencias
-        if (yPos > pageHeight - 150) { // Salto de página si no hay espacio
+        if (yPos > pageHeight - 80) {
           doc.addPage();
           yPos = margin;
         }
@@ -159,61 +187,96 @@ export class AppComponent implements OnInit {
         doc.text('Evidencias:', margin, yPos);
         yPos += 20;
 
-        // Dibujar evidencias en una grilla de 2 columnas
-        const colWidth = (pageWidth - margin * 3) / 2;
-        const imgMaxHeight = 150;
-        const containerPadding = 10;
-        const containerHeight = imgMaxHeight + (containerPadding * 2) + 20; // Espacio para imagen, padding y texto
-        let col = 0;
-
         for (const ev of esc.evidencias) {
-          const xPos = margin + (col * (colWidth + margin));
-          
-          if (yPos > pageHeight - (containerHeight + margin)) {
-            doc.addPage();
-            yPos = margin;
-            col = 0; // Reiniciar columnas en la nueva página
-          }
-          
-          // === DIBUJAR EL CONTENEDOR CON FONDO Y BORDE ===
-          doc.setFillColor('#f5f5f5'); // Fondo gris muy claro
-          doc.setDrawColor('#e0e0e0'); // Borde sutil
-          doc.setLineWidth(1);
-          doc.roundedRect(xPos, yPos, colWidth, containerHeight, 5, 5, 'FD'); // 'FD' = Fill and Draw (Rellenar y dibujar borde)
+          const getImg = (data: string): Promise<HTMLImageElement> => {
+            return new Promise((resolve, reject) => {
+              const img = new Image();
+              img.onload = () => resolve(img);
+              img.onerror = (err) => reject(err);
+              img.src = data;
+            });
+          };
 
-          // === DIBUJAR TEXTO E IMAGEN DENTRO DEL CONTENEDOR ===
-          // Dibujar el nombre del archivo
-          doc.setFontSize(9);
-          doc.setTextColor('#333');
-          doc.text(
-            ev.nombre,
-            xPos + containerPadding,
-            yPos + containerPadding + 5,
-            { maxWidth: colWidth - (containerPadding * 2) }
-          );
-
-          // Dibujar la imagen
-          const imageY = yPos + containerPadding + 20;
           try {
-             doc.addImage(
-               ev.data, 
-               'PNG', 
-               xPos + containerPadding, 
-               imageY, 
-               colWidth - (containerPadding * 2), 
-               imgMaxHeight
-              );
-          } catch(e) {
-            console.error(`Error al añadir imagen: ${ev.nombre}`, e);
-            doc.text('Error al cargar imagen', xPos + containerPadding, imageY);
-          }
+            const img = await getImg(ev.data);
+            const imgMaxWidth = pageWidth - margin * 2;
+            const aspectRatio = img.width / img.height;
+            const scaledHeight = imgMaxWidth / aspectRatio;
+            const pageContentHeight = pageHeight - margin * 2;
 
-          // Mover a la siguiente posición en la grilla
-          if (col === 1) { // Si es la segunda columna, bajar la posición Y para la siguiente fila
-            yPos += containerHeight + 20; // 20 es el espacio entre filas
-            col = 0;
-          } else { // Si es la primera, pasar a la segunda columna
-            col = 1;
+            // Decidir si la imagen necesita ser troceada
+            const mustSplit = scaledHeight > pageContentHeight;
+
+            if (!mustSplit) {
+              // --- RUTA PARA IMÁGENES NORMALES (NO SE TROCEAN) ---
+              const containerHeight = scaledHeight + 50; // padding + title
+
+              if (yPos + containerHeight > pageHeight - margin) {
+                doc.addPage();
+                yPos = margin;
+              }
+
+              doc.setFillColor('#f5f5f5');
+              doc.setDrawColor('#e0e0e0');
+              doc.roundedRect(margin, yPos, imgMaxWidth, containerHeight, 5, 5, 'FD');
+              doc.setFontSize(11);
+              doc.setTextColor('#333');
+              doc.text(ev.nombre, margin + 10, yPos + 18, { maxWidth: imgMaxWidth - 20 });
+              doc.addImage(img, 'PNG', margin + 10, yPos + 30, imgMaxWidth - 20, scaledHeight, undefined, 'FAST');
+              yPos += containerHeight + 20;
+
+            } else {
+              // --- RUTA PARA IMÁGENES MUY GRANDES (SE TROCEAN) ---
+              if (yPos + 40 > pageHeight - margin) { // Espacio para el título
+                doc.addPage();
+                yPos = margin;
+              }
+              doc.setFontSize(11);
+              doc.setTextColor('#333');
+              doc.text(ev.nombre, margin, yPos, { maxWidth: imgMaxWidth });
+              yPos += 20;
+
+              let sourceY = 0;
+              while (sourceY < img.height) {
+                let availableHeight = pageHeight - yPos - margin;
+                if (availableHeight <= 20) {
+                  doc.addPage();
+                  yPos = margin;
+                  availableHeight = pageHeight - yPos - margin;
+                }
+
+                const sliceHeightOnPdf = availableHeight;
+                const sliceHeightOnSource = (sliceHeightOnPdf / scaledHeight) * img.height;
+                const remainingSourceHeight = img.height - sourceY;
+                const currentSliceSourceHeight = Math.min(sliceHeightOnSource, remainingSourceHeight);
+                const currentSlicePdfHeight = (currentSliceSourceHeight / img.height) * scaledHeight;
+
+                const canvas = document.createElement('canvas');
+                canvas.width = img.width;
+                canvas.height = currentSliceSourceHeight;
+                const ctx = canvas.getContext('2d');
+                if (ctx) {
+                  ctx.drawImage(img, 0, sourceY, img.width, currentSliceSourceHeight, 0, 0, img.width, currentSliceSourceHeight);
+                  const sliceDataUrl = canvas.toDataURL('image/png');
+                  doc.addImage(sliceDataUrl, 'PNG', margin, yPos, imgMaxWidth, currentSlicePdfHeight, undefined, 'FAST');
+                }
+
+                sourceY += currentSliceSourceHeight;
+                yPos += currentSlicePdfHeight;
+
+                if (sourceY < img.height) {
+                  doc.addPage();
+                  yPos = margin;
+                }
+              }
+              yPos += 30;
+            }
+          } catch (e) {
+            console.error(`Error al procesar imagen: ${ev.nombre}`, e);
+            if (yPos > pageHeight - 100) { doc.addPage(); yPos = margin; }
+            doc.setTextColor('#ff0000');
+            doc.text(`Error al cargar imagen: ${ev.nombre}`, margin, yPos + 20);
+            yPos += 40;
           }
         }
       }
@@ -233,13 +296,10 @@ export class AppComponent implements OnInit {
     doc.text('Aprobador:', margin, margin + 200);
     doc.line(margin + 85, margin + 195, margin + 400, margin + 195);
 
-
     // ======================================================
     // 5. Paginación y llenado del Índice
     // ======================================================
     const totalPages = doc.getNumberOfPages();
-    
-    // Llenar el índice en la página 2
     doc.setPage(pageIndex);
     let yPosIndex = margin + 50;
     for (const item of indiceItems) {
@@ -252,7 +312,6 @@ export class AppComponent implements OnInit {
       yPosIndex += 20;
     }
 
-    // Añadir pie de página a todas las páginas
     for (let i = 1; i <= totalPages; i++) {
       doc.setPage(i);
       doc.setFontSize(10);
@@ -265,4 +324,49 @@ export class AppComponent implements OnInit {
     // ======================================================
     doc.save('reporte_casos_prueba.pdf');
   }
-} 
+
+  onExcelFileChange(event: Event, escenarioIndex: number) {
+    const input = event.target as HTMLInputElement;
+    if (!input.files || input.files.length === 0) return;
+    const file = input.files[0];
+    const reader = new FileReader();
+    reader.onload = (e: any) => {
+      const data = new Uint8Array(e.target.result);
+      const workbook = XLSX.read(data, { type: 'array' });
+      const sheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[sheetName];
+      const json = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+      this.excelTableDataPorEscenario[escenarioIndex] = json as string[][];
+      this.showExcelPreviewPorEscenario[escenarioIndex] = true;
+      this.excelPreviewEscenarioActivo = escenarioIndex;
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  onExcelImageReadyPorEscenario(imageUrl: string, escenarioIndex: number) {
+    this.escenarios[escenarioIndex].evidencias.push({ tipo: 'img', nombre: 'Excel convertido', data: imageUrl });
+    this.showExcelPreviewPorEscenario[escenarioIndex] = false;
+    this.excelPreviewEscenarioActivo = null;
+  }
+
+  openImageEditor(escenarioIndex: number, evidenciaIndex: number) {
+    this.imageEditorEscenarioIndex = escenarioIndex;
+    this.imageEditorEvidenciaIndex = evidenciaIndex;
+    this.imageEditorData = this.escenarios[escenarioIndex].evidencias[evidenciaIndex].data;
+    this.imageEditorVisible = true;
+  }
+
+  closeImageEditor() {
+    this.imageEditorVisible = false;
+    this.imageEditorData = null;
+    this.imageEditorEscenarioIndex = null;
+    this.imageEditorEvidenciaIndex = null;
+  }
+
+  saveImageEditor(editedData: string) {
+    if (this.imageEditorEscenarioIndex !== null && this.imageEditorEvidenciaIndex !== null) {
+      this.escenarios[this.imageEditorEscenarioIndex].evidencias[this.imageEditorEvidenciaIndex].data = editedData;
+    }
+    this.closeImageEditor();
+  }
+}
